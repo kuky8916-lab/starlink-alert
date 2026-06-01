@@ -138,17 +138,36 @@ async function main() {
 
     foundAny = true;
 
-    const best = results[0];
-    const cloud = await getCloudCover(loc.lat, loc.lon, best.start.epoch);
+   const picked = [];
 
-    message += `⭐ ${formatKoreanTime(best.start.epoch)} ~ ${formatKoreanTime(
-      best.end.epoch
-    )}\n`;
-    message += `약 ${best.mins}분 / ${dirKo(best.startDirText)}→${dirKo(
-      best.endDirText
-    )}\n`;
-    message += `최대고도 ${Math.round(best.maxElev)}° / 밝기 ${best.brightness}\n`;
-    message += `${cloudText(cloud)}\n\n`;
+for (const item of results) {
+  const isDuplicateTime = picked.some((p) => {
+    const diffMin = Math.abs(p.start.epoch - item.start.epoch) / 60;
+    return diffMin <= 8;
+  });
+
+  if (!isDuplicateTime) {
+    picked.push(item);
+  }
+
+  if (picked.length >= 3) break;
+}
+
+const medals = ["🥇", "🥈", "🥉"];
+
+for (let i = 0; i < picked.length; i++) {
+  const item = picked[i];
+  const cloud = await getCloudCover(loc.lat, loc.lon, item.start.epoch);
+
+  message += `${medals[i]} ${formatKoreanTime(item.start.epoch)} ~ ${formatKoreanTime(
+    item.end.epoch
+  )}\n`;
+  message += `약 ${item.mins}분 / ${dirKo(item.startDirText)}→${dirKo(
+    item.endDirText
+  )}\n`;
+  message += `최대고도 ${Math.round(item.maxElev)}° / 밝기 ${item.brightness}\n`;
+  message += `${cloudText(cloud)}\n\n`;
+} 
   }
 
   message += "※ 실제 관측은 날씨·구름·위성궤도 변경에 따라 달라질 수 있고, 시간은 ±10분 정도 여유를 두세요.";
