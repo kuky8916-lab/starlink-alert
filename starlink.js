@@ -13,6 +13,8 @@ const TLE_URL =
 
 const MAX_BRIGHTNESS = 2.5;
 const MIN_ELEVATION = 40;
+const MAX_RESULTS_PER_CITY = 3;
+const DUPLICATE_TIME_MINUTES = 8;
 
 function formatKoreanTime(epochSec) {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -71,6 +73,21 @@ function cloudText(cloud) {
   return `구름 ${cloud}% / 관측 어려움`;
 }
 
+function gradeText(item, cloud) {
+  const brightness = Number(item.brightness);
+  const elevation = Number(item.maxElev);
+
+  if (brightness <= 2.0 && elevation >= 60 && cloud !== null && cloud <= 30) {
+    return "⭐⭐⭐ 강력 추천";
+  }
+
+  if (brightness <= 2.5 && elevation >= 50 && (cloud === null || cloud <= 60)) {
+    return "⭐⭐ 추천";
+  }
+
+  return "";
+}
+
 async function sendTelegram(text) {
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
 
@@ -98,6 +115,7 @@ async function main() {
 
   let message = "🛰️ 스타링크 관측 추천\n\n";
   let foundAny = false;
+  let strongRecommend = false;
 
   for (const loc of LOCATIONS) {
     let results = [];
@@ -129,48 +147,62 @@ async function main() {
       .filter((x) => Number(x.maxElev) >= MIN_ELEVATION)
       .sort((a, b) => Number(a.brightness) - Number(b.brightness));
 
+    const picked = [];
+
+    for (const item of results) {
+      const isDuplicateTime = picked.some((p) => {
+        const diffMin = Math.abs(p.start.epoch - item.start.epoch) / 60;
+        return diffMin <= DUPLICATE_TIME_MINUTES;
+      });
+
+      if (!isDuplicateTime) {
+        picked.push(item);
+      }
+
+      if (picked.length >= MAX_RESULTS_PER_CITY) break;
+    }
+
     message += `📍${loc.name}\n`;
 
-    if (results.length === 0) {
+    if (picked.length === 0) {
       message += "추천 관측 시간이 없습니다.\n\n";
       continue;
     }
 
     foundAny = true;
 
-   const picked = [];
+    const medals = ["🥇", "🥈", "🥉"];
 
-for (const item of results) {
-  const isDuplicateTime = picked.some((p) => {
-    const diffMin = Math.abs(p.start.epoch - item.start.epoch) / 60;
-    return diffMin <= 8;
-  });
+    for (let i = 0; i < picked.length; i++) {
+      const item = picked[i];
+      const cloud = await getCloudCover(loc.lat, loc.lon, item.start.epoch);
+      const grade = gradeText(item, cloud);
 
-  if (!isDuplicateTime) {
-    picked.push(item);
+      if (grade.includes("강력 추천")) {
+        strongRecommend = true;
+      }
+
+      if (grade) {
+        message += `${grade}\n`;
+      }
+
+      message += `${medals[i]} ${formatKoreanTime(item.start.epoch)} ~ ${formatKoreanTime(
+        item.end.epoch
+      )}\n`;
+      message += `약 ${item.mins}분 / ${dirKo(item.startDirText)}→${dirKo(
+        item.endDirText
+      )}\n`;
+      message += `최대고도 ${Math.round(item.maxElev)}° / 밝기 ${item.brightness}\n`;
+      message += `${cloudText(cloud)}\n\n`;
+    }
   }
 
-  if (picked.length >= 3) break;
-}
+  message =
+    (strongRecommend ? "🟢 오늘 관측 추천\n\n" : "🟡 조건 맞으면 관측 가능\n\n") +
+    message;
 
-const medals = ["🥇", "🥈", "🥉"];
-
-for (let i = 0; i < picked.length; i++) {
-  const item = picked[i];
-  const cloud = await getCloudCover(loc.lat, loc.lon, item.start.epoch);
-
-  message += `${medals[i]} ${formatKoreanTime(item.start.epoch)} ~ ${formatKoreanTime(
-    item.end.epoch
-  )}\n`;
-  message += `약 ${item.mins}분 / ${dirKo(item.startDirText)}→${dirKo(
-    item.endDirText
-  )}\n`;
-  message += `최대고도 ${Math.round(item.maxElev)}° / 밝기 ${item.brightness}\n`;
-  message += `${cloudText(cloud)}\n\n`;
-} 
-  }
-
-  message += "※ 실제 관측은 날씨·구름·위성궤도 변경에 따라 달라질 수 있고, 시간은 ±10분 정도 여유를 두세요.";
+  message +=
+    "※ 실제 관측은 날씨·구름·위성궤도 변경에 따라 달라질 수 있고, 시간은 ±10분 정도 여유를 두세요.";
 
   if (foundAny) {
     await sendTelegram(message);
