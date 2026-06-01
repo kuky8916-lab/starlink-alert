@@ -11,6 +11,9 @@ const LOCATIONS = [
 const TLE_URL =
   "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=json";
 
+const MAX_BRIGHTNESS = 2.5;
+const MIN_ELEVATION = 40;
+
 function formatKoreanTime(epochSec) {
   return new Intl.DateTimeFormat("ko-KR", {
     timeZone: "Asia/Seoul",
@@ -35,6 +38,37 @@ function dirKo(text = "") {
     northwest: "북서",
   };
   return map[text.toLowerCase()] || text;
+}
+
+async function getCloudCover(lat, lon, epochSec) {
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+    `&hourly=cloud_cover&timezone=Asia%2FSeoul&forecast_days=3`;
+
+  const data = await fetch(url).then((r) => r.json());
+
+  const target = new Date(epochSec * 1000);
+  const targetHour =
+    target.getFullYear() +
+    "-" +
+    String(target.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(target.getDate()).padStart(2, "0") +
+    "T" +
+    String(target.getHours()).padStart(2, "0") +
+    ":00";
+
+  const idx = data.hourly.time.indexOf(targetHour);
+  if (idx === -1) return null;
+
+  return data.hourly.cloud_cover[idx];
+}
+
+function cloudText(cloud) {
+  if (cloud === null || cloud === undefined) return "구름정보 없음";
+  if (cloud <= 30) return `구름 ${cloud}% / 관측 좋음`;
+  if (cloud <= 60) return `구름 ${cloud}% / 관측 보통`;
+  return `구름 ${cloud}% / 관측 어려움`;
 }
 
 async function sendTelegram(text) {
@@ -62,7 +96,7 @@ async function main() {
 
   const sats = await fetch(TLE_URL).then((r) => r.json());
 
-  let message = "🛰️ 스타링크 관측 가능 시간\n\n";
+  let message = "🛰️ 스타링크 관측 추천\n\n";
   let foundAny = false;
 
   for (const loc of LOCATIONS) {
@@ -91,29 +125,30 @@ async function main() {
     }
 
     results = results
-      .filter((x) => Number(x.brightness) <= 2.5)
-      .sort((a, b) => a.start.epoch - b.start.epoch)
-      .slice(0, 5);
+      .filter((x) => Number(x.brightness) <= MAX_BRIGHTNESS)
+      .filter((x) => Number(x.maxElev) >= MIN_ELEVATION)
+      .sort((a, b) => Number(a.brightness) - Number(b.brightness));
 
     message += `📍${loc.name}\n`;
 
     if (results.length === 0) {
-      message += "관측 가능성이 높은 시간이 없습니다.\n\n";
+      message += "추천 관측 시간이 없습니다.\n\n";
       continue;
     }
 
     foundAny = true;
 
-    for (const x of results) {
-      message += `- ${formatKoreanTime(x.start.epoch)} ~ ${formatKoreanTime(
-        x.end.epoch
-      )}\n`;
-      message += `  약 ${x.mins}분 / ${dirKo(x.startDirText)}→${dirKo(
-        x.endDirText
-      )} / 최대고도 ${Math.round(x.maxElev)}° / 밝기 ${x.brightness ?? "-"}\n`;
-    }
+    const best = results[0];
+    const cloud = await getCloudCover(loc.lat, loc.lon, best.start.epoch);
 
-    message += "\n";
+    message += `⭐ ${formatKoreanTime(best.start.epoch)} ~ ${formatKoreanTime(
+      best.end.epoch
+    )}\n`;
+    message += `약 ${best.mins}분 / ${dirKo(best.startDirText)}→${dirKo(
+      best.endDirText
+    )}\n`;
+    message += `최대고도 ${Math.round(best.maxElev)}° / 밝기 ${best.brightness}\n`;
+    message += `${cloudText(cloud)}\n\n`;
   }
 
   message += "※ 실제 관측은 날씨·구름·위성궤도 변경에 따라 달라질 수 있고, 시간은 ±10분 정도 여유를 두세요.";
@@ -121,7 +156,7 @@ async function main() {
   if (foundAny) {
     await sendTelegram(message);
   } else {
-    console.log("오늘/내일 관측 가능성이 높은 시간이 없어 전송하지 않음");
+    console.log("추천 관측 시간이 없어 전송하지 않음");
   }
 }
 
