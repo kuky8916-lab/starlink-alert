@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "start": "node starlink.js"
+  },
+  "dependencies": {
+    "sat-timings": "^2.1.0"
+  }
+}
