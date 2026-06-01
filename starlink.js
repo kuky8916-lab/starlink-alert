@@ -91,7 +91,7 @@ async function main() {
     }
 
     results = results
-      .filter((x) => x.visibility === "good" || x.brightnessText === "bright")
+      .filter((x) => Number(x.brightness) <= 2.5)
       .sort((a, b) => a.start.epoch - b.start.epoch)
       .slice(0, 5);
 
