@@ -221,6 +221,7 @@ async function main() {
     formatKoreanTime(item.start.epoch) +
     " ~ " +
     formatKoreanTime(item.end.epoch),
+  duration: item.mins,      
   direction:
     dirKo(item.startDirText) +
     "→" +
