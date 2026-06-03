@@ -239,7 +239,6 @@ async function main() {
   if (foundAny) {
   await sendToGoogleSheet(sheetItems);
   await sendTelegram(message);
-}
   } else {
     console.log("추천 관측 시간이 없어 전송하지 않음");
   }
