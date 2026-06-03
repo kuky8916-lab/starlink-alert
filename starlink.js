@@ -107,19 +107,23 @@ async function sendTelegram(text) {
 }
 
 async function sendToGoogleSheet(items) {
-
   const url = process.env.GOOGLE_SCRIPT_URL;
-  if (!url) return;
 
-  await fetch(url, {
+  console.log("GOOGLE_SCRIPT_URL exists =", !!url);
+
+  if (!url) {
+    console.log("GOOGLE_SCRIPT_URL 없음");
+    return;
+  }
+
+  const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      items: items
-    })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
   });
+
+  console.log("Google response status =", res.status);
+  console.log("Google response text =", await res.text());
 }
 
 async function main() {
