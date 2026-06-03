@@ -106,7 +106,24 @@ async function sendTelegram(text) {
   }
 }
 
+async function sendToGoogleSheet(items) {
+
+  const url = process.env.GOOGLE_SCRIPT_URL;
+  if (!url) return;
+
+  await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      items: items
+    })
+  });
+}
+
 async function main() {
+  let sheetItems = [];
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     throw new Error("TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID가 없습니다.");
   }
@@ -194,6 +211,21 @@ async function main() {
       )}\n`;
       message += `최대고도 ${Math.round(item.maxElev)}° / 밝기 ${item.brightness}\n`;
       message += `${cloudText(cloud)}\n\n`;
+      sheetItems.push({
+  city: loc.name,
+  time:
+    formatKoreanTime(item.start.epoch) +
+    " ~ " +
+    formatKoreanTime(item.end.epoch),
+  direction:
+    dirKo(item.startDirText) +
+    "→" +
+    dirKo(item.endDirText),
+  elevation: Math.round(item.maxElev) + "°",
+  brightness: String(item.brightness),
+  cloud: cloudText(cloud),
+  grade: grade || "관측 가능"
+});
     }
   }
 
@@ -205,7 +237,9 @@ async function main() {
     "※ 실제 관측은 날씨·구름·위성궤도 변경에 따라 달라질 수 있고, 시간은 ±10분 정도 여유를 두세요.";
 
   if (foundAny) {
-    await sendTelegram(message);
+  await sendToGoogleSheet(sheetItems);
+  await sendTelegram(message);
+}
   } else {
     console.log("추천 관측 시간이 없어 전송하지 않음");
   }
