@@ -236,6 +236,9 @@ async function main() {
   message +=
     "※ 실제 관측은 날씨·구름·위성궤도 변경에 따라 달라질 수 있고, 시간은 ±10분 정도 여유를 두세요.";
 
+  console.log("foundAny =", foundAny);
+  console.log("sheetItems =", sheetItems.length);
+  
   if (foundAny) {
   await sendToGoogleSheet(sheetItems);
   await sendTelegram(message);
