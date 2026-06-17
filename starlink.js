@@ -16,6 +16,10 @@ const MIN_ELEVATION = 40;
 const MAX_RESULTS_PER_CITY = 3;
 const DUPLICATE_TIME_MINUTES = 8;
 
+const MAX_CLOUD = 60;
+const MAX_PRECIP_PROB = 50;
+const MAX_PRECIP_MM = 0.2;
+
 function formatKoreanTime(epochSec) {
   return new Intl.DateTimeFormat("ko-KR", {
     timeZone: "Asia/Seoul",
@@ -42,10 +46,11 @@ function dirKo(text = "") {
   return map[text.toLowerCase()] || text;
 }
 
-async function getCloudCover(lat, lon, epochSec) {
+async function getWeather(lat, lon, epochSec) {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-    `&hourly=cloud_cover&timezone=Asia%2FSeoul&forecast_days=3`;
+    `&hourly=cloud_cover,precipitation_probability,precipitation` +
+    `&timezone=Asia%2FSeoul&forecast_days=3`;
 
   const data = await fetch(url).then((r) => r.json());
 
@@ -61,27 +66,63 @@ async function getCloudCover(lat, lon, epochSec) {
     ":00";
 
   const idx = data.hourly.time.indexOf(targetHour);
-  if (idx === -1) return null;
+  if (idx === -1) {
+    return { cloud: null, precipProb: null, precip: null };
+  }
 
-  return data.hourly.cloud_cover[idx];
+  return {
+    cloud: data.hourly.cloud_cover[idx],
+    precipProb: data.hourly.precipitation_probability[idx],
+    precip: data.hourly.precipitation[idx],
+  };
 }
 
-function cloudText(cloud) {
-  if (cloud === null || cloud === undefined) return "구름정보 없음";
-  if (cloud <= 30) return `구름 ${cloud}% / 관측 좋음`;
-  if (cloud <= 60) return `구름 ${cloud}% / 관측 보통`;
-  return `구름 ${cloud}% / 관측 어려움`;
+function isWeatherBad(w) {
+  if (w.precipProb !== null && w.precipProb >= MAX_PRECIP_PROB) return true;
+  if (w.precip !== null && w.precip >= MAX_PRECIP_MM) return true;
+  if (w.cloud !== null && w.cloud > MAX_CLOUD) return true;
+  return false;
 }
 
-function gradeText(item, cloud) {
+function weatherText(w) {
+  const cloud = w.cloud === null ? "구름정보 없음" : `구름 ${w.cloud}%`;
+  const rainProb =
+    w.precipProb === null ? "강수확률 정보없음" : `강수확률 ${w.precipProb}%`;
+  const rain = w.precip === null ? "" : ` / 강수량 ${w.precip}mm`;
+
+  if (isWeatherBad(w)) {
+    return `${cloud} / ${rainProb}${rain} / 관측 비추천`;
+  }
+
+  if (w.cloud !== null && w.cloud <= 30 && w.precipProb !== null && w.precipProb <= 20) {
+    return `${cloud} / ${rainProb}${rain} / 관측 좋음`;
+  }
+
+  return `${cloud} / ${rainProb}${rain} / 관측 보통`;
+}
+
+function gradeText(item, w) {
   const brightness = Number(item.brightness);
   const elevation = Number(item.maxElev);
 
-  if (brightness <= 2.0 && elevation >= 60 && cloud !== null && cloud <= 30) {
+  if (isWeatherBad(w)) return "";
+
+  if (
+    brightness <= 2.0 &&
+    elevation >= 60 &&
+    w.cloud !== null &&
+    w.cloud <= 30 &&
+    w.precipProb !== null &&
+    w.precipProb <= 20
+  ) {
     return "⭐⭐⭐ 강력 추천";
   }
 
-  if (brightness <= 2.5 && elevation >= 50 && (cloud === null || cloud <= 60)) {
+  if (
+    brightness <= 2.5 &&
+    elevation >= 50 &&
+    (w.precipProb === null || w.precipProb <= 40)
+  ) {
     return "⭐⭐ 추천";
   }
 
@@ -101,33 +142,10 @@ async function sendTelegram(text) {
     }),
   });
 
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-}
-
-async function sendToGoogleSheet(items) {
-  const url = process.env.GOOGLE_SCRIPT_URL;
-
-  console.log("GOOGLE_SCRIPT_URL exists =", !!url);
-
-  if (!url) {
-    console.log("GOOGLE_SCRIPT_URL 없음");
-    return;
-  }
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items }),
-  });
-
-  console.log("Google response status =", res.status);
-  console.log("Google response text =", await res.text());
+  if (!res.ok) throw new Error(await res.text());
 }
 
 async function main() {
-  let sheetItems = [];
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     throw new Error("TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID가 없습니다.");
   }
@@ -176,9 +194,13 @@ async function main() {
         return diffMin <= DUPLICATE_TIME_MINUTES;
       });
 
-      if (!isDuplicateTime) {
-        picked.push(item);
-      }
+      if (isDuplicateTime) continue;
+
+      const weather = await getWeather(loc.lat, loc.lon, item.start.epoch);
+
+      if (isWeatherBad(weather)) continue;
+
+      picked.push({ item, weather });
 
       if (picked.length >= MAX_RESULTS_PER_CITY) break;
     }
@@ -186,51 +208,25 @@ async function main() {
     message += `📍${loc.name}\n`;
 
     if (picked.length === 0) {
-      message += "추천 관측 시간이 없습니다.\n\n";
+      message += "비·구름·강수확률 조건 때문에 추천 관측 시간이 없습니다.\n\n";
       continue;
     }
 
     foundAny = true;
-
     const medals = ["🥇", "🥈", "🥉"];
 
     for (let i = 0; i < picked.length; i++) {
-      const item = picked[i];
-      const cloud = await getCloudCover(loc.lat, loc.lon, item.start.epoch);
-      const grade = gradeText(item, cloud);
+      const { item, weather } = picked[i];
+      const grade = gradeText(item, weather);
 
-      if (grade.includes("강력 추천")) {
-        strongRecommend = true;
-      }
+      if (grade.includes("강력 추천")) strongRecommend = true;
 
-      if (grade) {
-        message += `${grade}\n`;
-      }
+      if (grade) message += `${grade}\n`;
 
-      message += `${medals[i]} ${formatKoreanTime(item.start.epoch)} ~ ${formatKoreanTime(
-        item.end.epoch
-      )}\n`;
-      message += `약 ${item.mins}분 / ${dirKo(item.startDirText)}→${dirKo(
-        item.endDirText
-      )}\n`;
-      message += `최대고도 ${Math.round(item.maxElev)}° / 밝기 ${item.brightness}\n`;
-      message += `${cloudText(cloud)}\n\n`;
-      sheetItems.push({
-  city: loc.name,
-  time:
-    formatKoreanTime(item.start.epoch) +
-    " ~ " +
-    formatKoreanTime(item.end.epoch),
-  duration: item.mins,      
-  direction:
-    dirKo(item.startDirText) +
-    "→" +
-    dirKo(item.endDirText),
-  elevation: Math.round(item.maxElev) + "°",
-  brightness: String(item.brightness),
-  cloud: cloudText(cloud),
-  grade: grade || "관측 가능"
-});
+      message += `${medals[i]} ${formatKoreanTime(item.start.epoch)} ~ ${formatKoreanTime(item.end.epoch)}\n`;
+      message += `약 ${item.mins}분 / ${dirKo(item.startDirText)}→${dirKo(item.endDirText)}\n`;
+      message += `최대고도 ${Math.round(item.maxElev)}° / 밝기 ${Number(item.brightness).toFixed(2)}\n`;
+      message += `${weatherText(weather)}\n\n`;
     }
   }
 
@@ -238,17 +234,12 @@ async function main() {
     (strongRecommend ? "🟢 오늘 관측 추천\n\n" : "🟡 조건 맞으면 관측 가능\n\n") +
     message;
 
-  message +=
-    "※ 실제 관측은 날씨·구름·위성궤도 변경에 따라 달라질 수 있고, 시간은 ±10분 정도 여유를 두세요.";
+  message += "※ 비·구름·강수확률 조건을 반영했습니다. 실제 시간은 ±10분 정도 여유를 두세요.";
 
-  console.log("foundAny =", foundAny);
-  console.log("sheetItems =", sheetItems.length);
-  
   if (foundAny) {
-  await sendToGoogleSheet(sheetItems);
-  await sendTelegram(message);
+    await sendTelegram(message);
   } else {
-    console.log("추천 관측 시간이 없어 전송하지 않음");
+    await sendTelegram("🔴 오늘 스타링크 관측 비추천\n\n비·구름·강수확률 조건 때문에 추천 관측 시간이 없습니다.");
   }
 }
 
