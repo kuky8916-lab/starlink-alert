@@ -190,7 +190,8 @@ async function main() {
 
     for (const item of results) {
       const isDuplicateTime = picked.some((p) => {
-        const diffMin = Math.abs(p.start.epoch - item.start.epoch) / 60;
+        const diffMin =
+  Math.abs(p.item.start.epoch - item.start.epoch) / 60;
         return diffMin <= DUPLICATE_TIME_MINUTES;
       });
 
